@@ -2,10 +2,12 @@
 
 เว็บต้นแบบสำหรับนำเสนอโครงงาน CN230 กลุ่ม S02-G07
 ใช้ Chunk 40 รายการ (KC001 ถึง KC040) โมเดล และเกณฑ์ชุดเดียวกับบท 6.5 ของเล่ม SRS
-คำนวณเวกเตอร์ในหน่วยความจำ เพื่อให้สาธิตได้โดยไม่ต้องเชื่อมต่อ Supabase
+ค่าเริ่มต้นคำนวณเวกเตอร์ในหน่วยความจำ ถ้าตั้งค่า Supabase ไว้ จะค้นและ UPSERT บนตาราง knowledge_chunks จริง
+ด้วยคำสั่งเดียวกับ Colab และกลับไปใช้หน่วยความจำเองเมื่อเชื่อมต่อไม่ได้
 
 วิธีรัน ดู README.txt
 """
+import atexit
 import hashlib
 import os
 import threading
@@ -13,6 +15,17 @@ import re
 import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 from pathlib import Path
+
+for _p in [Path(__file__).resolve().parent / ".env", Path(__file__).resolve().parent.parent / ".env"]:
+    if _p.exists():
+        with open(_p, encoding="utf-8") as _f:
+            for _line in _f:
+                _line = _line.strip()
+                if _line and not _line.startswith("#") and "=" in _line:
+                    _k, _v = _line.split("=", 1)
+                    os.environ.setdefault(_k.strip(), _v.strip())
+        break
+
 
 import numpy as np
 import pandas as pd
@@ -128,17 +141,174 @@ EDITS = {}  # chunk_id -> ค่าเดิมและค่าสมมติ
 EMBEDDER.encode(["อุ่นเครื่องโมเดลก่อนใช้งาน"])  # first query is slow without this
 
 
-def search(question, k=TOP_K):
-    q = EMBEDDER.encode([question])[0]
+# ---------------------------------------------------------------- Supabase pgvector (optional, same SQL as Colab step 9 and 10)
+class SupabaseStore:
+    """ต่อตาราง public.knowledge_chunks บน Supabase ด้วยคำสั่งเดียวกับ Colab
+    ตั้งค่าได้สองแบบ: SUPABASE_DB_URL หรือ SUPABASE_HOST SUPABASE_PORT SUPABASE_DB SUPABASE_USER SUPABASE_PASSWORD"""
+
+    name = "supabase"
+
+    def __init__(self):
+        import psycopg2  # noqa: F401  only needed when Supabase is configured
+        self.lock = threading.Lock()
+        self.conn = None
+
+    @staticmethod
+    def configured():
+        return bool(os.environ.get("SUPABASE_DB_URL", "").strip() or os.environ.get("SUPABASE_HOST", "").strip())
+
+    def _connect(self):
+        import psycopg2
+        url = os.environ.get("SUPABASE_DB_URL", "").strip()
+        if url:
+            return psycopg2.connect(url, sslmode="require", connect_timeout=10)
+        return psycopg2.connect(host=os.environ["SUPABASE_HOST"].strip(), port=int(os.environ.get("SUPABASE_PORT", "5432")),
+                                dbname=os.environ.get("SUPABASE_DB", "postgres").strip(), user=os.environ["SUPABASE_USER"].strip(),
+                                password=os.environ.get("SUPABASE_PASSWORD", ""), sslmode="require", connect_timeout=10)
+
+    def _run(self, sql, args=(), fetch="all", commit=False):
+        import psycopg2
+        with self.lock:
+            for attempt in (1, 2):
+                try:
+                    if self.conn is None or self.conn.closed:
+                        self.conn = self._connect()
+                    with self.conn.cursor() as cur:
+                        cur.execute(sql, args)
+                        out = cur.fetchall() if fetch == "all" else cur.fetchone() if fetch == "one" else None
+                    if commit:
+                        self.conn.commit()
+                    else:
+                        self.conn.rollback()  # end the read transaction so later reads see fresh data
+                    return out
+                except (psycopg2.OperationalError, psycopg2.InterfaceError):
+                    self.conn = None  # connection dropped (pooler timeout, sleep); reconnect once
+                    if attempt == 2:
+                        raise
+                except Exception:
+                    if self.conn is not None and not self.conn.closed:
+                        self.conn.rollback()
+                    raise
+
+    @staticmethod
+    def vec(v):
+        return "[" + ",".join(f"{float(x):.7g}" for x in v) + "]"
+
+    def info(self):
+        n, ids, model = self._run("SELECT count(*), count(DISTINCT chunk_id), string_agg(DISTINCT model_name, ', ') "
+                                  "FROM public.knowledge_chunks", fetch="one")
+        return {"rows": int(n), "distinct_ids": int(ids), "model": model or ""}
+
+    def rows(self):
+        return {cid: (content, ts) for cid, content, ts in
+                self._run("SELECT chunk_id, content, updated_at FROM public.knowledge_chunks")}
+
+    def topk(self, qvec, k):
+        q = self.vec(qvec)
+        return self._run("SELECT chunk_id, content, source_id, 1 - (embedding <=> %s::extensions.vector) AS score "
+                         "FROM public.knowledge_chunks ORDER BY embedding <=> %s::extensions.vector LIMIT %s", (q, q, k))
+
+    def upsert(self, chunk_id, content, source_id, vec):
+        row = self._run("""
+            INSERT INTO public.knowledge_chunks (chunk_id, content, source_id, embedding, model_name)
+            VALUES (%s, %s, %s, %s::extensions.vector, %s)
+            ON CONFLICT (chunk_id) DO UPDATE SET
+                content = EXCLUDED.content, source_id = EXCLUDED.source_id, embedding = EXCLUDED.embedding,
+                model_name = EXCLUDED.model_name, updated_at = CURRENT_TIMESTAMP
+            RETURNING updated_at""", (chunk_id, content, source_id, self.vec(vec), DB_MODEL_NAME), fetch="one", commit=True)
+        return row[0]
+
+
+def same_model(name):
+    """'sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2' จาก Colab คือโมเดลเดียวกัน"""
+    return str(name).strip().removeprefix("sentence-transformers/") == EMBED_MODEL
+
+
+DB_MODEL_NAME = EMBED_MODEL  # ชื่อที่อยู่ในคอลัมน์ model_name ใช้ตอน UPSERT ให้ทั้งคอลัมน์เขียนแบบเดียวกัน
+
+STORE = None          # SupabaseStore when connected, None means vectors in memory
+BACKEND_NOTE = "ค้นจากเวกเตอร์ในหน่วยความจำ"
+DB_FALLBACKS = 0      # number of searches that fell back to memory because Supabase failed
+
+
+def _ts(value):
+    if value is None:
+        return ""
+    if hasattr(value, "astimezone"):
+        return value.astimezone().strftime("%Y-%m-%d %H:%M:%S")
+    return str(value)
+
+
+def init_store(store):
+    """ตรวจตารางบน Supabase ก่อนใช้: ต้องมี 40 แถว รหัสตรงกับชุดในเล่ม และสร้างด้วยโมเดลเดียวกัน
+    ถ้ามีแถวที่ข้อความไม่ตรงกับไฟล์ (เช่นค่าสมมติค้างจากการสาธิต) จะแสดงแถบเตือนให้คืนค่าเดิม"""
+    global STORE, BACKEND_NOTE, DB_MODEL_NAME
+    info = store.info()
+    rows = store.rows()
+    if info["rows"] != len(CHUNK_IDS) or set(rows) != set(CHUNK_IDS):
+        raise RuntimeError(f"ตาราง knowledge_chunks มี {info['rows']} แถว ไม่ตรงกับ Chunk {len(CHUNK_IDS)} รายการในเล่ม")
+    if "," in info["model"] or not same_model(info["model"]):
+        raise RuntimeError(f"เวกเตอร์บน Supabase สร้างด้วยโมเดล {info['model'] or 'ไม่ระบุ'} ไม่ใช่ {EMBED_MODEL}")
+    DB_MODEL_NAME = info["model"].strip()
+    with LOCK:
+        for cid, (content, ts) in rows.items():
+            i = CHUNK_INDEX[cid]
+            UPDATED_AT[cid] = _ts(ts)
+            if content != TEXT_ORIGINAL[i]:
+                CHUNKS.at[i, "text"] = content
+                VECTORS[i] = EMBEDDER.encode([content])[0]
+                EDITS[cid] = {"original": chunk_value(TEXT_ORIGINAL[i]), "now": chunk_value(content)}
+    STORE = store
+    BACKEND_NOTE = f"ค้นด้วย pgvector บน Supabase ตาราง public.knowledge_chunks {info['rows']} แถว"
+    return info
+
+
+def connect_supabase():
+    global BACKEND_NOTE
+    if not SupabaseStore.configured():
+        return
+    if EMBEDDER.name != EMBED_MODEL:
+        BACKEND_NOTE = "ไม่ต่อ Supabase ในโหมดทดสอบ เพราะเวกเตอร์ทดสอบจะทับเวกเตอร์จริง"
+        return
+    try:
+        init_store(SupabaseStore())
+    except ModuleNotFoundError:
+        BACKEND_NOTE = "ยังไม่ได้ติดตั้ง psycopg2-binary ให้รัน pip install -r requirements.txt จึงค้นจากหน่วยความจำแทน"
+    except Exception as exc:  # never print the connection string or password
+        BACKEND_NOTE = f"ต่อ Supabase ไม่สำเร็จ ({type(exc).__name__}: {str(exc).splitlines()[0][:160] if isinstance(exc, RuntimeError) else 'ตรวจค่าการเชื่อมต่อ'}) จึงค้นจากหน่วยความจำแทน"
+
+
+def restore_on_exit():
+    if STORE is not None and EDITS:
+        try:
+            reset_chunks()
+            print("คืนค่าเดิมบน Supabase แล้ว")
+        except Exception as exc:
+            print("คืนค่าเดิมบน Supabase ไม่สำเร็จ", type(exc).__name__, "เปิดเว็บใหม่แล้วกดคืนค่าเดิม")
+
+
+
+def _ranked(q, k):
+    """[(chunk_id, text, score)] จาก Supabase ถ้าเชื่อมต่ออยู่ ไม่เช่นนั้นจากหน่วยความจำ"""
+    global DB_FALLBACKS
+    if STORE is not None:
+        try:
+            return [(cid, content, float(score)) for cid, content, _sid, score in STORE.topk(q, k)], "supabase"
+        except Exception:
+            DB_FALLBACKS += 1
     with LOCK:
         sims = VECTORS @ q
         texts = CHUNKS["text"].tolist()
-    order = np.argsort(-sims)[:k]
+    return [(CHUNK_IDS[i], texts[i], float(sims[i])) for i in np.argsort(-sims)[:k]], "memory"
+
+
+def search(question, k=TOP_K):
+    q = EMBEDDER.encode([question])[0]
+    ranked, backend = _ranked(q, k)
     hits = []
-    for rank, i in enumerate(order, start=1):
-        cid = CHUNK_IDS[i]
+    for rank, (cid, text, score) in enumerate(ranked, start=1):
         p = CPROV.loc[cid]
-        value = chunk_value(texts[i])
+        value = chunk_value(text)
         hits.append({
             "rank": rank,
             "chunk_id": cid,
@@ -148,11 +318,12 @@ def search(question, k=TOP_K):
             "stage": p["stage"],
             "item": clean(p["flow_name"]),
             "value": value,
-            "sentence": clean(texts[i]),
-            "raw": texts[i],
+            "sentence": clean(text),
+            "raw": text,
             "_sp": (p["process_id"], p["flow_name"]),
             "_obj": value,
-            "similarity": round(float(sims[i]), 4),
+            "similarity": round(score, 4),
+            "backend": backend,
             "table": "LCI_EXCHANGE",
             "ref_source": f"{p['source_id']} {p['source_short']}",
             "ref_location": clean(p["source_location"]),
@@ -321,6 +492,7 @@ def search_result(question):
         "gemini_available": gemini_ready() and found,
         "search_ms": round((time.perf_counter() - t0) * 1000),
         "hits": [{k: v for k, v in h.items() if k not in {"raw", "_sp", "_obj"}} for h in hits],
+        "backend": hits[0]["backend"] if hits else "memory",
     }
     if found and unknown_terms(question):
         result["mode"] = "check"
@@ -560,6 +732,14 @@ def run_eval(use_gemini=False):
 def chunk_rows():
     with LOCK:
         texts = CHUNKS["text"].tolist()
+    if STORE is not None:
+        try:
+            db = STORE.rows()
+            texts = [db[cid][0] for cid in CHUNK_IDS]
+            for cid in CHUNK_IDS:
+                UPDATED_AT[cid] = _ts(db[cid][1])
+        except Exception:
+            pass
     rows = []
     for cid, text in zip(CHUNK_IDS, texts):
         p = CPROV.loc[cid]
@@ -600,33 +780,58 @@ def upsert_chunk(chunk_id, new_value, question):
         raise ValueError("ค่าใหม่เท่ากับค่าปัจจุบัน")
     new_text = old_text[:m.start(2)] + raw + old_text[m.end(2):]
     before = _answer_snapshot(question, chunk_id)
-    rows_before, updated_before = len(set(CHUNK_IDS)), UPDATED_AT[chunk_id]
     new_vec = EMBEDDER.encode([new_text])[0]
+    target = "memory"
+    if STORE is not None:
+        try:
+            rows_before = STORE.info()["rows"]
+            updated_before = _ts(STORE.rows()[chunk_id][1])
+            db_ts = STORE.upsert(chunk_id, new_text, CPROV.loc[chunk_id, "source_id"], new_vec)
+            target = "supabase"
+        except Exception as exc:
+            raise ValueError(f"เขียนลง Supabase ไม่สำเร็จ ({type(exc).__name__}) ข้อมูลบนฐานข้อมูลไม่เปลี่ยน") from exc
+    else:
+        rows_before, updated_before = len(set(CHUNK_IDS)), UPDATED_AT[chunk_id]
     with LOCK:
         old_vec = VECTORS[i].copy()
         CHUNKS.at[i, "text"] = new_text
         VECTORS[i] = new_vec
-        UPDATED_AT[chunk_id] = time.strftime("%Y-%m-%d %H:%M:%S")
+        UPDATED_AT[chunk_id] = _ts(db_ts) if target == "supabase" else time.strftime("%Y-%m-%d %H:%M:%S")
         first = EDITS.get(chunk_id, {}).get("original", chunk_value(TEXT_ORIGINAL[i]))
         EDITS[chunk_id] = {"original": first, "now": chunk_value(new_text)}
     after = _answer_snapshot(question, chunk_id)
-    return {"chunk_id": chunk_id, "old_value": chunk_value(old_text), "new_value": chunk_value(new_text),
+    if target == "supabase":
+        info = STORE.info()
+        rows_after, rows_with_id = info["rows"], STORE._run(
+            "SELECT count(*) FROM public.knowledge_chunks WHERE chunk_id = %s", (chunk_id,), fetch="one")[0]
+    else:
+        rows_after, rows_with_id = len(set(CHUNK_IDS)), CHUNK_IDS.count(chunk_id)
+    return {"chunk_id": chunk_id, "target": target, "old_value": chunk_value(old_text), "new_value": chunk_value(new_text),
             "question": question, "before": before, "after": after,
-            "rows_before": rows_before, "rows_after": len(set(CHUNK_IDS)), "rows_with_id": CHUNK_IDS.count(chunk_id),
+            "rows_before": rows_before, "rows_after": rows_after, "rows_with_id": int(rows_with_id),
             "updated_before": updated_before, "updated_after": UPDATED_AT[chunk_id],
             "cosine_old_new": round(float(old_vec @ new_vec), 4), "answer_changed": before["answer"] != after["answer"]}
 
 
 def reset_chunks():
+    if STORE is not None:
+        for cid in list(EDITS):
+            i = CHUNK_INDEX[cid]
+            UPDATED_AT[cid] = _ts(STORE.upsert(cid, TEXT_ORIGINAL[i], CPROV.loc[cid, "source_id"], VECTORS_ORIGINAL[i]))
+        db = STORE.rows()
+        db_same = all(db[cid][0] == TEXT_ORIGINAL[CHUNK_INDEX[cid]] for cid in CHUNK_IDS)
+    else:
+        db_same = True
     with LOCK:
         n = len(EDITS)
         CHUNKS["text"] = TEXT_ORIGINAL
         VECTORS[:] = VECTORS_ORIGINAL
-        for cid in EDITS:
-            UPDATED_AT[cid] = time.strftime("%Y-%m-%d %H:%M:%S")
+        if STORE is None:
+            for cid in EDITS:
+                UPDATED_AT[cid] = time.strftime("%Y-%m-%d %H:%M:%S")
         EDITS.clear()
-        same = bool(np.array_equal(VECTORS, VECTORS_ORIGINAL)) and CHUNKS["text"].tolist() == TEXT_ORIGINAL
-    return {"restored": n, "matches_original": same, "rows": len(CHUNK_IDS)}
+        same = bool(np.array_equal(VECTORS, VECTORS_ORIGINAL)) and CHUNKS["text"].tolist() == TEXT_ORIGINAL and db_same
+    return {"restored": n, "matches_original": same, "rows": len(CHUNK_IDS), "target": "supabase" if STORE else "memory"}
 
 
 # ---------------------------------------------------------------- app
@@ -654,6 +859,9 @@ def status():
         "gemini_fallback": GEMINI_FALLBACK,
         "demo_edit": DEMO_EDIT,
         "edited": sorted(EDITS),
+        "backend": "supabase" if STORE is not None else "memory",
+        "backend_note": BACKEND_NOTE,
+        "db_fallbacks": DB_FALLBACKS,
     })
 
 
@@ -833,7 +1041,10 @@ def api_upsert():
 
 @app.post("/api/reset")
 def api_reset():
-    return jsonify(reset_chunks())
+    try:
+        return jsonify(reset_chunks())
+    except Exception as exc:
+        return jsonify({"error": f"คืนค่าเดิมบน Supabase ไม่สำเร็จ ({type(exc).__name__}) ลองกดอีกครั้ง"}), 503
 
 
 if __name__ == "__main__":
@@ -841,5 +1052,10 @@ if __name__ == "__main__":
     print(f"เปิดเบราว์เซอร์ที่ http://127.0.0.1:{port}")
     print("โมเดลค้นหา:", EMBEDDER.name)
     print("ข้อมูล:", f"Chunk {len(CHUNK_IDS)} รายการ ชุดเดียวกับบท 6.5")
+    connect_supabase()
+    atexit.register(restore_on_exit)
+    print("ฐานข้อมูลเวกเตอร์:", BACKEND_NOTE)
+    if EDITS:
+        print("คำเตือน: ข้อมูลบน Supabase ต่างจากเล่มที่", ", ".join(sorted(EDITS)), "กดคืนค่าเดิมในเว็บก่อนนำเสนอ")
     print("Gemini:", f"พร้อม รุ่น {GEMINI_MODEL} สำรอง {GEMINI_FALLBACK or '-'} รอสูงสุด {GEMINI_TIMEOUT_S:g} วินาที" if gemini_ready() else "ไม่ได้ตั้งค่าคีย์ ปุ่ม Gemini จะไม่แสดง")
     app.run(host="127.0.0.1", port=port, debug=False, threaded=True)

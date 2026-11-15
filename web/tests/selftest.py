@@ -17,6 +17,13 @@ import app  # noqa: E402  loads MiniLM and the 40 chunks KC001-KC040
 
 print(f"โหลดโมเดลและข้อมูล {time.perf_counter() - t0:.1f} วินาที")
 print("โมเดล", app.EMBEDDER.name, "| Chunk", len(app.CHUNK_IDS), "| k", app.TOP_K, "| เกณฑ์", app.SIMILARITY_THRESHOLD)
+app.connect_supabase()
+print("ฐานข้อมูลเวกเตอร์", app.BACKEND_NOTE)
+if app.STORE is not None:
+    print("   การทดสอบ UPSERT จะเขียนลง Supabase จริงแล้วคืนค่าเดิมทันที")
+    if app.EDITS:
+        print("   พบข้อมูลค้างจากการสาธิต", ", ".join(sorted(app.EDITS)), "คืนค่าเดิมก่อนทดสอบ")
+        app.reset_chunks()
 print("Gemini", f"ตั้งค่าคีย์แล้ว รุ่น {app.GEMINI_MODEL} สำรอง {app.GEMINI_FALLBACK}" if app.gemini_ready() else "ยังไม่ได้ตั้งค่าคีย์ จะข้ามการทดสอบ Gemini")
 print()
 
