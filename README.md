@@ -7,7 +7,7 @@
 ```
 Nexus4j/
 ├── data/            ข้อมูลตาราง 5NF ทั้ง 29 ตาราง (CSV)
-├── web/             เว็บต้นแบบ Palm LCI Portal (Soft UI) ดูวิธีรันใน web/README.txt
+├── web/             เว็บต้นแบบ Palm LCI Portal (Soft UI) ดูวิธีรันใน web/README.md
 │   ├── app.py
 │   ├── data/        ข้อมูลที่เว็บใช้ (สำเนาบางตารางจาก data/, eval_results, knowledge_chunks)
 │   ├── static/      หน้าเว็บ ฟอนต์ และภาพ (สถาปัตยกรรม, Heatmap, PCA)
@@ -46,6 +46,7 @@ CREATE TABLE IF NOT EXISTS public.knowledge_chunks (
 
 | ไฟล์โค้ด | งาน | ขั้นตอนในสมุดบันทึก |
 |---|---|---|
+| `notebooks/M4_Nexus4j_V_2.ipynb` | สมุดบันทึกหลักของโครงงาน (เตรียมข้อมูล, สร้างเวกเตอร์, DDL, นำเข้า pgvector) | 1 ถึง 17 |
 | `notebooks/w32_rag_answer.py` | W32 ค้นคืน 5 อันดับแล้วตอบจากหลักฐาน | 18, 19 |
 | `notebooks/w33_graph_rag.py` | W33 Graph RAG เดินกราฟ 2 ระดับ | 20 |
 | `notebooks/w35_eval.py` | W35 ประเมิน 5 คำถาม คะแนน 0 ถึง 3 และ Precision@5 | 21 |
@@ -61,6 +62,6 @@ CREATE TABLE IF NOT EXISTS public.knowledge_chunks (
 
 ## ข้อควรระวัง
 
-- ห้าม commit คีย์ Gemini รหัสผ่าน Supabase หรือไฟล์ `.env` ใช้ Colab Secrets หรือ `export` ใน Terminal เท่านั้น
+- ห้าม commit คีย์ Gemini รหัสผ่าน Supabase หรือไฟล์ `.env` (ไฟล์ `.env` ถูกใส่ใน `.gitignore` ไว้แล้ว) ให้ใช้ Colab Secrets หรือกรอกใน `.env` เฉพาะในเครื่องเท่านั้น
 - `notebooks/w33_graph_rag.py` อ่าน CSV 5NF จากโฟลเดอร์ `data/` ของ repo นี้ผ่าน GitHub หากย้ายไฟล์ต้องแก้ `REPO_RAW` ในไฟล์ด้วย
 - ข้อมูลทั้งหมดเป็นข้อมูลจากงานวิจัยที่เผยแพร่แล้ว ไม่มีข้อมูลส่วนบุคคล ค่า 6.20 kg ในการทดลอง UPSERT เป็นค่าสมมติ

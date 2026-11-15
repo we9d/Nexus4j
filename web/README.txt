@@ -40,9 +40,10 @@ Palm LCI Portal  เว็บต้นแบบของกลุ่ม S02-G07
        source .venv/bin/activate
        pip install -r requirements.txt
      ครั้งต่อไปพิมพ์แค่ source .venv/bin/activate
-  3  ใส่คีย์ Gemini ใน Terminal เท่านั้น ห้ามเขียนลงไฟล์
-       export GEMINI_API_KEY="วางคีย์ตรงนี้"
-     ถ้าไม่ใส่คีย์ เว็บยังใช้ได้ครบ แค่ไม่มีปุ่ม Gemini
+  3  ใส่คีย์ Gemini และค่า Supabase (ถ้ามี) ในไฟล์ .env ที่โฟลเดอร์ web (ไฟล์นี้อยู่ใน .gitignore ห้าม commit)
+       GEMINI_API_KEY="วางคีย์ตรงนี้"
+       SUPABASE_DB_URL="postgresql://..."
+     ถ้าไม่ใส่คีย์ เว็บยังใช้ได้ครบ แค่ไม่มีปุ่ม Gemini และค้นจากหน่วยความจำแทน
   4  รันเว็บ
        python app.py
      รอจนขึ้นว่า เปิดเบราว์เซอร์ที่ http://127.0.0.1:8081 แล้วเปิดลิงก์นั้นใน Chrome หรือ Safari
@@ -69,15 +70,15 @@ Palm LCI Portal  เว็บต้นแบบของกลุ่ม S02-G07
 
 เชื่อม Supabase (ไม่บังคับ)
   เว็บจะค้นด้วยคำสั่ง ORDER BY embedding <=> ... LIMIT 5 และ UPSERT ด้วย INSERT ON CONFLICT DO UPDATE เหมือน Colab ขั้นตอนที่ 9 และ 10
-  ใส่ค่าใน Terminal เท่านั้น ห้ามเขียนลงไฟล์ และห้าม commit
-  แบบที่ 1 ค่าเดียวกับที่กรอกใน Colab ขั้นตอนที่ 7
-       export SUPABASE_HOST="ค่า Host"
-       export SUPABASE_PORT="5432"
-       export SUPABASE_DB="postgres"
-       export SUPABASE_USER="ค่า User"
-       export SUPABASE_PASSWORD="รหัสผ่าน"
-  แบบที่ 2 connection string จากปุ่ม Connect ในหน้าโปรเจกต์ Supabase (เลือก Session pooler)
-       export SUPABASE_DB_URL="postgresql://..."
+  ใส่ในไฟล์ .env ที่โฟลเดอร์ web (ไฟล์นี้อยู่ใน .gitignore ห้าม commit) หรือตั้งค่าใน Terminal
+  แบบที่ 1 connection string จากปุ่ม Connect ในหน้าโปรเจกต์ Supabase (เลือก Session pooler)
+       SUPABASE_DB_URL="postgresql://..."
+  แบบที่ 2 ค่าเดียวกับที่กรอกใน Colab ขั้นตอนที่ 7
+       SUPABASE_HOST="ค่า Host"
+       SUPABASE_PORT="5432"
+       SUPABASE_DB="postgres"
+       SUPABASE_USER="ค่า User"
+       SUPABASE_PASSWORD="รหัสผ่าน"
   แล้วรัน python app.py ตามปกติ บรรทัด ฐานข้อมูลเวกเตอร์ ต้องขึ้นว่า ค้นด้วย pgvector บน Supabase ตาราง public.knowledge_chunks 40 แถว
   มุมขวาบนของเว็บจะขึ้นว่า Supabase pgvector
   สิ่งที่ระบบทำให้เอง
