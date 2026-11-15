@@ -1,0 +1,11 @@
+﻿seed,hops,upstream,source_id,journal,path
+P-06,1,,SRC-04,Energy,P-06 (การขนส่งผลปาล์มทะลายสดจากสวนไปโรงสกัด) -ใช้ข้อมูลจาก-> SRC-04 [PROCESS_SOURCE รูปที่ 1; หัวข้อ 2.3.4]
+P-06,2,P-00,SRC-01,Journal of Cleaner Production,P-00 (การปลูกปาล์มน้ำมัน ค่าเฉลี่ยประเทศ) -ส่งผลปาล์มทะลายสดไปยัง-> P-06 [PROCESS_LINK SRC-04 รูปที่ 1] ; P-00 -ใช้ข้อมูลจาก-> SRC-01 [PROCESS_SOURCE ตารางที่ 3 คอลัมน์ Average]
+P-06,2,P-01,SRC-01,Journal of Cleaner Production,P-01 (การปลูกปาล์มน้ำมัน ภาคเหนือ) -ส่งผลปาล์มทะลายสดไปยัง-> P-06 [PROCESS_LINK SRC-04 รูปที่ 1] ; P-01 -ใช้ข้อมูลจาก-> SRC-01 [PROCESS_SOURCE ตารางที่ 3 คอลัมน์ North]
+P-06,2,P-02,SRC-01,Journal of Cleaner Production,P-02 (การปลูกปาล์มน้ำมัน ภาคตะวันออกเฉียงเหนือ) -ส่งผลปาล์มทะลายสดไปยัง-> P-06 [PROCESS_LINK SRC-04 รูปที่ 1] ; P-02 -ใช้ข้อมูลจาก-> SRC-01 [PROCESS_SOURCE ตารางที่ 3 คอลัมน์ Northeast]
+P-06,2,P-03,SRC-01,Journal of Cleaner Production,P-03 (การปลูกปาล์มน้ำมัน ภาคกลาง) -ส่งผลปาล์มทะลายสดไปยัง-> P-06 [PROCESS_LINK SRC-04 รูปที่ 1] ; P-03 -ใช้ข้อมูลจาก-> SRC-01 [PROCESS_SOURCE ตารางที่ 3 คอลัมน์ Central]
+P-06,2,P-04,SRC-01,Journal of Cleaner Production,P-04 (การปลูกปาล์มน้ำมัน ภาคตะวันออก) -ส่งผลปาล์มทะลายสดไปยัง-> P-06 [PROCESS_LINK SRC-04 รูปที่ 1] ; P-04 -ใช้ข้อมูลจาก-> SRC-01 [PROCESS_SOURCE ตารางที่ 3 คอลัมน์ East]
+P-06,2,P-05,SRC-01,Journal of Cleaner Production,P-05 (การปลูกปาล์มน้ำมัน ภาคใต้) -ส่งผลปาล์มทะลายสดไปยัง-> P-06 [PROCESS_LINK SRC-04 รูปที่ 1] ; P-05 -ใช้ข้อมูลจาก-> SRC-01 [PROCESS_SOURCE ตารางที่ 3 คอลัมน์ South]
+P-02,1,,SRC-01,Journal of Cleaner Production,P-02 (การปลูกปาล์มน้ำมัน ภาคตะวันออกเฉียงเหนือ) -ใช้ข้อมูลจาก-> SRC-01 [PROCESS_SOURCE ตารางที่ 3 คอลัมน์ Northeast]
+P-05,1,,SRC-01,Journal of Cleaner Production,P-05 (การปลูกปาล์มน้ำมัน ภาคใต้) -ใช้ข้อมูลจาก-> SRC-01 [PROCESS_SOURCE ตารางที่ 3 คอลัมน์ South]
+P-03,1,,SRC-01,Journal of Cleaner Production,P-03 (การปลูกปาล์มน้ำมัน ภาคกลาง) -ใช้ข้อมูลจาก-> SRC-01 [PROCESS_SOURCE ตารางที่ 3 คอลัมน์ Central]
