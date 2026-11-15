@@ -6,7 +6,7 @@ import networkx as nx
 import matplotlib.pyplot as plt
 import pandas as pd
 
-REPO_RAW = "https://raw.githubusercontent.com/we9d/Neexus4j/main/data/"
+REPO_RAW = "https://raw.githubusercontent.com/we9d/Nexus4j/main/data/"
 
 
 def load_csv(name):
