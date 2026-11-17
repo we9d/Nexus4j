@@ -120,6 +120,56 @@ class HashEmbedder:
         return out / np.where(n == 0, 1, n)
 
 
+class HFInferenceEmbedder:
+    """เรียก Hugging Face Inference API แทนการโหลด PyTorch ในเครื่อง (ประหยัด RAM สำหรับ Railway 1 GB)"""
+
+    name = EMBED_MODEL
+    url = f"https://router.huggingface.co/hf-inference/models/sentence-transformers/{EMBED_MODEL}/pipeline/feature-extraction"
+
+    def __init__(self, token):
+        self.token = token.strip()
+
+    def encode(self, texts):
+        import json
+        import urllib.error
+        import urllib.request
+
+        payload = json.dumps({"inputs": list(texts)}).encode("utf-8")
+        headers = {
+            "Authorization": f"Bearer {self.token}",
+            "Content-Type": "application/json",
+        }
+        last_err = None
+        for attempt in range(4):
+            req = urllib.request.Request(self.url, data=payload, headers=headers, method="POST")
+            try:
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    arr = np.asarray(json.loads(resp.read().decode("utf-8")), dtype=np.float32)
+                break
+            except urllib.error.HTTPError as exc:
+                last_err = exc
+                if exc.code in (429, 500, 502, 503, 504) and attempt < 3:
+                    time.sleep(1.5 * (attempt + 1))
+                    continue
+                body = exc.read().decode("utf-8", errors="ignore")[:200]
+                raise RuntimeError(f"HF Inference API error {exc.code}: {body}") from exc
+            except Exception as exc:
+                last_err = exc
+                if attempt < 3:
+                    time.sleep(1.5 * (attempt + 1))
+                    continue
+                raise
+        else:
+            raise last_err
+
+        if arr.ndim == 3:
+            arr = arr.mean(axis=1)
+        elif arr.ndim == 1:
+            arr = arr[np.newaxis, :]
+        norms = np.linalg.norm(arr, axis=1, keepdims=True)
+        return arr / np.where(norms == 0, 1, norms)
+
+
 class MiniLM:
     name = EMBED_MODEL
 
@@ -131,14 +181,27 @@ class MiniLM:
         return np.asarray(self.m.encode(list(texts), normalize_embeddings=True, convert_to_numpy=True), dtype=np.float32)
 
 
-EMBEDDER = HashEmbedder() if os.environ.get("S02G07_TEST_EMBEDDER") == "1" else MiniLM()
+def _create_embedder():
+    if os.environ.get("S02G07_TEST_EMBEDDER") == "1":
+        return HashEmbedder()
+    hf_token = (os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACEHUB_API_TOKEN") or "").strip()
+    if hf_token:
+        return HFInferenceEmbedder(hf_token)
+    try:
+        return MiniLM()
+    except ModuleNotFoundError as exc:
+        raise RuntimeError("ไม่พบ sentence-transformers และไม่ได้ตั้งค่า HF_TOKEN") from exc
+
+
+EMBEDDER = _create_embedder()
 VECTORS = EMBEDDER.encode(TEXT_ORIGINAL)
 VECTORS_ORIGINAL = VECTORS.copy()
 LOCK = threading.Lock()  # การค้นและการ UPSERT ใช้เวกเตอร์ชุดเดียวกัน
 STARTED_AT = time.strftime("%Y-%m-%d %H:%M:%S")
 UPDATED_AT = {cid: STARTED_AT for cid in CHUNK_IDS}
 EDITS = {}  # chunk_id -> ค่าเดิมและค่าสมมติที่แก้ในหน้าสาธิต
-EMBEDDER.encode(["อุ่นเครื่องโมเดลก่อนใช้งาน"])  # first query is slow without this
+if isinstance(EMBEDDER, MiniLM):
+    EMBEDDER.encode(["อุ่นเครื่องโมเดลก่อนใช้งาน"])  # first query is slow without this
 
 
 # ---------------------------------------------------------------- Supabase pgvector (optional, same SQL as Colab step 9 and 10)
