@@ -170,6 +170,28 @@ class HFInferenceEmbedder:
         return arr / np.where(norms == 0, 1, norms)
 
 
+class FastEmbedMiniLM:
+    """รัน paraphrase-multilingual-MiniLM-L12-v2 ผ่าน ONNX Runtime (fastembed) ไม่ต้องใช้ PyTorch"""
+
+    name = EMBED_MODEL
+
+    def __init__(self):
+        from fastembed import TextEmbedding
+        cache_dir = os.environ.get("FASTEMBED_CACHE_PATH") or None
+        self.m = TextEmbedding(
+            model_name=f"sentence-transformers/{EMBED_MODEL}",
+            cache_dir=cache_dir,
+            threads=1,
+        )
+
+    def encode(self, texts):
+        arr = np.asarray(list(self.m.embed(list(texts))), dtype=np.float32)
+        if arr.ndim == 1:
+            arr = arr[np.newaxis, :]
+        norms = np.linalg.norm(arr, axis=1, keepdims=True)
+        return arr / np.where(norms == 0, 1, norms)
+
+
 class MiniLM:
     name = EMBED_MODEL
 
@@ -184,13 +206,17 @@ class MiniLM:
 def _create_embedder():
     if os.environ.get("S02G07_TEST_EMBEDDER") == "1":
         return HashEmbedder()
-    hf_token = (os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACEHUB_API_TOKEN") or "").strip()
-    if hf_token:
-        return HFInferenceEmbedder(hf_token)
     try:
         return MiniLM()
+    except ModuleNotFoundError:
+        pass
+    try:
+        return FastEmbedMiniLM()
     except ModuleNotFoundError as exc:
-        raise RuntimeError("ไม่พบ sentence-transformers และไม่ได้ตั้งค่า HF_TOKEN") from exc
+        hf_token = (os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACEHUB_API_TOKEN") or "").strip()
+        if hf_token:
+            return HFInferenceEmbedder(hf_token)
+        raise RuntimeError("ไม่พบ sentence-transformers หรือ fastembed") from exc
 
 
 EMBEDDER = _create_embedder()

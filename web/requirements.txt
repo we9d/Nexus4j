@@ -1,5 +1,6 @@
 flask>=3,<4
 gunicorn>=21,<24
+fastembed>=0.4,<1
 pandas>=2,<4
 numpy>=1.26,<3
 google-genai>=1,<2
