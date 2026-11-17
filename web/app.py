@@ -265,6 +265,8 @@ def init_store(store):
 
 def connect_supabase():
     global BACKEND_NOTE
+    if STORE is not None:
+        return
     if not SupabaseStore.configured():
         return
     if EMBEDDER.name != EMBED_MODEL:
@@ -1047,15 +1049,17 @@ def api_reset():
         return jsonify({"error": f"คืนค่าเดิมบน Supabase ไม่สำเร็จ ({type(exc).__name__}) ลองกดอีกครั้ง"}), 503
 
 
+connect_supabase()
+atexit.register(restore_on_exit)
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "8081"))
-    print(f"เปิดเบราว์เซอร์ที่ http://127.0.0.1:{port}")
+    host = os.environ.get("HOST", "127.0.0.1")
+    print(f"เปิดเบราว์เซอร์ที่ http://{host}:{port}")
     print("โมเดลค้นหา:", EMBEDDER.name)
     print("ข้อมูล:", f"Chunk {len(CHUNK_IDS)} รายการ ชุดเดียวกับบท 6.5")
-    connect_supabase()
-    atexit.register(restore_on_exit)
     print("ฐานข้อมูลเวกเตอร์:", BACKEND_NOTE)
     if EDITS:
         print("คำเตือน: ข้อมูลบน Supabase ต่างจากเล่มที่", ", ".join(sorted(EDITS)), "กดคืนค่าเดิมในเว็บก่อนนำเสนอ")
     print("Gemini:", f"พร้อม รุ่น {GEMINI_MODEL} สำรอง {GEMINI_FALLBACK or '-'} รอสูงสุด {GEMINI_TIMEOUT_S:g} วินาที" if gemini_ready() else "ไม่ได้ตั้งค่าคีย์ ปุ่ม Gemini จะไม่แสดง")
-    app.run(host="127.0.0.1", port=port, debug=False, threaded=True)
+    app.run(host=host, port=port, debug=False, threaded=True)
